@@ -14,15 +14,15 @@ global{
 	file study_area <- file("../includes/AEPH.shp");
 	file building_shp <- file("../includes/desplante.shp");
 	shape_file watershed_shp <- shape_file("../includes/microcuencas_2022.shp");
-	//grid_file dem_file <- file("../includes/mdt_scaled.tif");
+	grid_file dem_file <- file("../includes/mdt_scaled.tif");
 	image_file satellite_image_file <- image_file("../includes/satellite.png");
 	image_file satellite2_image_file <- image_file("../includes/satellite_grayscale.png");
 
+	//DEM
+	field terrain <- field(dem_file) ;
+	field valid_dem <- field(terrain.columns,terrain.rows);	
 	
-	//field terrain <- field(dem_file) ;
-	//field dem <- field(terrain.columns, terrain.rows);
-	
-	geometry shape <- envelope(limits_shp);
+	geometry shape <- envelope(dem_file);
 	string scenario parameter:current_scenario <- "current" among:["current","2011"];
 	bool show_satellite parameter:satellite <- true;
 	bool grayscale_satellite parameter:grayscale_satellite <- false;
@@ -43,15 +43,21 @@ global{
 		create area from:study_area with:[type::"intervention area"];
 		create area from:limits_squared_shp with:[type::"limits_squared"];
 		create area from:watershed_shp with:[type::"watershed"];
+		
+		
+		do compute_indicators;
+		do filter_valid_pixels;
 		create building from:building_shp with:[from_scenario::"current"]{
 			drawable <- true;
 			add self to:active_buildings;
+		}
+		ask building{
+			do fix_height;
 		}
 		create building number:200 with:[from_scenario::"2011"]{
 			do init_random;
 			add self to:new_buildings;
 		}
-		do compute_indicators;
 	}
 	reflex listen_changes{
 		if scenario != last_scenario{
@@ -83,6 +89,14 @@ global{
 		else if permeability >0.75{flooding_risk <- "moderado";}
 		else {flooding_risk <- "alto";}
 	}
+	 //Actions related to DEM
+	 action filter_valid_pixels{
+	 	area the_area <- first(area where(each.type="limits"));
+	 	list<point> valid_points <- valid_dem points_in the_area-1;
+	 	loop pt over:valid_points{
+	 		valid_dem[pt] <- terrain[pt]>2092?0:(terrain[pt]<919?0:terrain[pt]);
+	 	}
+	 } 
 }
 
 species building{
@@ -91,8 +105,12 @@ species building{
 	int width;
 	int length;
 	int heigth <- rnd(4,50);
+	action fix_height{
+		location <- {location.x,location.y,valid_dem[{location.x,location.y}]};
+	}
 	action init_random{
 		location <- any_location_in(one_of(area where(each.type="intervention area")));
+		do fix_height;
 		width <- rnd(20,100);
 		length <- rnd(20,100);
 		shape <- rectangle(width,length);
@@ -138,8 +156,8 @@ experiment main type:gui{
 				draw "Riesgo de inundación: "+flooding_risk at:{70#px,165#px} color:#white font:font("Arial", 35,#bold);
 			}
 			camera 'default' location: {1797.5449,38492.9671,12417.5757} target: {12996.2918,17431.1874,0.0};
-			//mesh terrain scale: 1 triangulation: true  color: palette([#burlywood, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
-			species area aspect:default;
+			mesh valid_dem scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
+			//species area aspect:default;
 			species building aspect:default;
 		}
 	}

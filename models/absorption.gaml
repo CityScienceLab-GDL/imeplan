@@ -14,15 +14,26 @@ global{
 	file study_area <- file("../includes/AEPH.shp");
 	file building_shp <- file("../includes/desplante.shp");
 	shape_file watershed_shp <- shape_file("../includes/microcuencas_2022.shp");
-	grid_file dem_file <- file("../includes/mdt_scaled.tif");
+	grid_file dem_file <- file("../includes/mdt_scaled_clipped.tif");
 	image_file satellite_image_file <- image_file("../includes/satellite.png");
 	image_file satellite2_image_file <- image_file("../includes/satellite_grayscale.png");
 
-	//DEM
+	//Scenario geometry
+	geometry shape <- envelope(dem_file);
+	
+	//DEM and water diffusion stuff
 	field terrain <- field(dem_file) ;
 	field valid_dem <- field(terrain.columns,terrain.rows);	
+	list<point> points <- valid_dem points_in shape;
+	map<point, list<point>> neighbors <- points as_map (each::(valid_dem neighbors_of each));
+	map<point, bool> done <- points as_map (each::false);
+	map<point, float> h <- points as_map (each::terrain[each]);
+	map<point, float> heights <- [];
+	list<point> source_cells <- [];
+	int frequence_input <- 3;
+	float diffusion_rate <- 0.8;
+	float input_water<-1.0 min:0.0 max:3.0 parameter:"rain";
 	
-	geometry shape <- envelope(dem_file);
 	string scenario parameter:current_scenario <- "current" among:["current","2011"];
 	bool show_satellite parameter:satellite <- true;
 	bool grayscale_satellite parameter:grayscale_satellite <- false;
@@ -30,6 +41,7 @@ global{
 	string last_scenario <- scenario;
 	list<building> active_buildings;
 	list<building> new_buildings;
+	
 	
 	
 	//indicators
@@ -44,13 +56,13 @@ global{
 		create area from:limits_squared_shp with:[type::"limits_squared"];
 		create area from:watershed_shp with:[type::"watershed"];
 		
-		
 		do compute_indicators;
 		do filter_valid_pixels;
 		create building from:building_shp with:[from_scenario::"current"]{
 			drawable <- true;
 			add self to:active_buildings;
 		}
+		
 		ask building{
 			do fix_height;
 		}
@@ -58,6 +70,9 @@ global{
 			do init_random;
 			add self to:new_buildings;
 		}
+		
+		//source_cells <- valid_dem where(each.location.x 0)
+		
 	}
 	reflex listen_changes{
 		if scenario != last_scenario{
@@ -65,6 +80,39 @@ global{
 			last_scenario <- scenario;
 		}
 	}
+	
+	//Reflex to add water among the water cells
+	reflex adding_input_water when: every(frequence_input#cycle){
+		loop p over: points {
+			valid_dem[p] <- valid_dem[p] + input_water;
+		}
+	}
+	float height (point c) {
+		return h[c] + valid_dem[c];
+	}
+	
+	//Reflex to flow the water according to the altitude and the obstacle
+	reflex flowing {
+		done[] <- false;
+		heights <- points as_map (each::height(each));
+		list<point> water <- points where (valid_dem[each] > 0) sort_by (heights[each]);
+		loop p over: points - water {
+			done[p] <- true;
+		}
+		loop p over: water {
+			float height <- height(p);
+			loop flow_cell over: (neighbors[p] where (done[each] and height > heights[each])) sort_by heights[each]  {
+				float water_flowing <- max(0.0, min((height - heights[flow_cell]), valid_dem[p] * diffusion_rate));
+				valid_dem[p] <- valid_dem[p] - water_flowing;
+				valid_dem[flow_cell] <- valid_dem[flow_cell] + water_flowing;
+				heights[p] <- height(p) ;
+				heights[flow_cell] <- height(flow_cell) ;
+			}
+			done[p] <- true;
+		}
+	}
+	
+	
 	action switch_scenario{
 		if scenario = "current"{
 			ask active_buildings{
@@ -155,8 +203,10 @@ experiment main type:gui{
 				draw "Área de filtración: "+permeability_per+"%" at:{70#px,125#px} color:#white font:font("Arial", 35,#bold);
 				draw "Riesgo de inundación: "+flooding_risk at:{70#px,165#px} color:#white font:font("Arial", 35,#bold);
 			}
-			camera 'default' location: {1797.5449,38492.9671,12417.5757} target: {12996.2918,17431.1874,0.0};
-			mesh valid_dem scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
+			camera 'default' location: {4211.3619,23177.9523,12112.5252} target: {10086.6575,5095.6516,0.0};
+			//camera 'default' location: {1797.5449,38492.9671,12417.5757} target: {12996.2918,17431.1874,0.0};
+			mesh valid_dem scale: 1 triangulation: false  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
+			mesh valid_dem scale: 1 triangulation: true color: palette(reverse(brewer_colors("Blues"))) transparency: 0.5 no_data:0.0 ;
 			//species area aspect:default;
 			species building aspect:default;
 		}

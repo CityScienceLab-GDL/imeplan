@@ -34,12 +34,12 @@ global{
 	list<point> source_cells <- [];
 	int frequence_input <- 1;
 	float diffusion_rate <- 0.8;
-	float input_water<-0.1 min:0.0 max:3.0 parameter:"rain";
+	float input_water<-0.001 min:0.0 max:0.1 parameter:"rain";
 	
-	string scenario parameter:current_scenario <- "current" among:["current","2011"];
-	bool show_satellite parameter:satellite <- true;
-	bool grayscale_satellite parameter:grayscale_satellite <- false;
-	bool show_watershed parameter:watershed <- false;
+	string scenario;
+	bool grayscale_satellite;
+	bool show_satellite;
+	bool show_watershed;
 	string last_scenario <- scenario;
 	list<building> active_buildings;
 	list<building> new_buildings;
@@ -61,13 +61,18 @@ global{
 		//do compute_indicators;
 		
 		do filter_valid_pixels;
+		loop c from:0 to:flow.columns{
+			loop r from: 0 to:flow.rows{
+				flow[{c,r}]<- -1.0;
+			}
+		}
 		loop pt over:points-valid_points{
 			terrain[pt]<- -1.0;
 			flow[pt]<- -1.0;
 		}
 		loop pt over: valid_points  {
-				flow[pt] <- terrain[pt];
-			}
+			flow[pt] <- valid_terrain[pt];
+		}
 		create building from:building_shp with:[from_scenario::"current"]{
 			drawable <- true;
 			add self to:active_buildings;
@@ -105,7 +110,7 @@ global{
 	reflex flowing {
 		done[] <- false;
 		heights <- points as_map (each::height(each));
-		list<point> water <- valid_points where (flow[each] > 0) sort_by (heights[each]);
+		list<point> water <- valid_points where (flow[each] > 0 and flow[each]<2092) sort_by (heights[each]);
 		loop p over: points - water {
 			done[p] <- true;
 		}
@@ -207,17 +212,20 @@ species area{
 }
 
 experiment main type:gui{
+	
+	parameter "watershed" var:show_watershed init:false;
+	parameter "show satellite" var:show_satellite init:false;
+	parameter "current scenario" var:scenario init:"current";
 	output{
-		display main_display type:opengl background:#black axes:true{
+		display main_display type:opengl background:#black axes:false fullscreen:0{
 			overlay size:{0,0} position:{0.05,0.05} transparency:0.5 background:#black{
 				draw "Escenario: "+scenario at:{70#px,70#px} color:#white font: font("Arial", 75,#bold);
 				draw "Área de filtración: "+permeability_per+"%" at:{70#px,125#px} color:#white font:font("Arial", 35,#bold);
 				draw "Riesgo de inundación: "+flooding_risk at:{70#px,165#px} color:#white font:font("Arial", 35,#bold);
 			}
-			camera 'default' location: {1894.7121,15588.966,8311.7077} target: {5926.385,3180.7526,0.0};
-			//camera 'default' location: {1797.5449,38492.9671,12417.5757} target: {12996.2918,17431.1874,0.0};
+			//camera 'default' location: {1894.7121,15588.966,8311.7077} target: {5926.385,3180.7526,0.0};
 			mesh valid_terrain scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
-			mesh flow scale: 1 triangulation: true color: palette(reverse(brewer_colors("Blues"))) transparency: 0.5 no_data:-1.0 ;
+			mesh flow scale: 1 triangulation: true color: palette((brewer_colors("Blues"))) transparency: 0.5 no_data:-1.0 ;
 			//species area aspect:default;
 			species building aspect:default;
 		}

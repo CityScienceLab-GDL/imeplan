@@ -9,30 +9,32 @@
 model absorption
 
 global{
-	file limits_shp <- file("../includes/area_estudio.shp");
+	file limits_shp <- file("../includes/cuenca_rancho_contento.shp");
 	file limits_squared_shp <- file("../includes/area_estudio_squared.shp");
 	file study_area <- file("../includes/AEPH.shp");
 	file building_shp <- file("../includes/desplante.shp");
 	shape_file watershed_shp <- shape_file("../includes/microcuencas_2022.shp");
 	grid_file dem_file <- file("../includes/mdt_scaled_clipped.tif");
-	image_file satellite_image_file <- image_file("../includes/satellite.png");
-	image_file satellite2_image_file <- image_file("../includes/satellite_grayscale.png");
+	//image_file satellite_image_file <- image_file("../includes/satellite.png");
+	//image_file satellite2_image_file <- image_file("../includes/satellite_grayscale.png");
 
 	//Scenario geometry
 	geometry shape <- envelope(dem_file);
 	
 	//DEM and water diffusion stuff
 	field terrain <- field(dem_file) ;
-	field valid_dem <- field(terrain.columns,terrain.rows);	
-	list<point> points <- valid_dem points_in shape;
-	map<point, list<point>> neighbors <- points as_map (each::(valid_dem neighbors_of each));
+	field valid_terrain <- field(terrain.columns, terrain.rows);
+	field flow <- field(terrain.columns,terrain.rows);	
+	list<point> points <- flow points_in shape;
+	list<point> valid_points;
+	map<point, list<point>> neighbors <- points as_map (each::(flow neighbors_of each));
 	map<point, bool> done <- points as_map (each::false);
-	map<point, float> h <- points as_map (each::terrain[each]);
+	map<point, float> h <- valid_points as_map (each::terrain[each]);
 	map<point, float> heights <- [];
 	list<point> source_cells <- [];
-	int frequence_input <- 3;
+	int frequence_input <- 1;
 	float diffusion_rate <- 0.8;
-	float input_water<-1.0 min:0.0 max:3.0 parameter:"rain";
+	float input_water<-0.1 min:0.0 max:3.0 parameter:"rain";
 	
 	string scenario parameter:current_scenario <- "current" among:["current","2011"];
 	bool show_satellite parameter:satellite <- true;
@@ -56,8 +58,16 @@ global{
 		create area from:limits_squared_shp with:[type::"limits_squared"];
 		create area from:watershed_shp with:[type::"watershed"];
 		
-		do compute_indicators;
+		//do compute_indicators;
+		
 		do filter_valid_pixels;
+		loop pt over:points-valid_points{
+			terrain[pt]<- -1.0;
+			flow[pt]<- -1.0;
+		}
+		loop pt over: valid_points  {
+				flow[pt] <- terrain[pt];
+			}
 		create building from:building_shp with:[from_scenario::"current"]{
 			drawable <- true;
 			add self to:active_buildings;
@@ -83,28 +93,28 @@ global{
 	
 	//Reflex to add water among the water cells
 	reflex adding_input_water when: every(frequence_input#cycle){
-		loop p over: points {
-			valid_dem[p] <- valid_dem[p] + input_water;
+		loop p over: valid_points {
+			flow[p] <- flow[p] + input_water;
 		}
 	}
 	float height (point c) {
-		return h[c] + valid_dem[c];
+		return h[c] + flow[c];
 	}
 	
 	//Reflex to flow the water according to the altitude and the obstacle
 	reflex flowing {
 		done[] <- false;
 		heights <- points as_map (each::height(each));
-		list<point> water <- points where (valid_dem[each] > 0) sort_by (heights[each]);
+		list<point> water <- valid_points where (flow[each] > 0) sort_by (heights[each]);
 		loop p over: points - water {
 			done[p] <- true;
 		}
 		loop p over: water {
 			float height <- height(p);
 			loop flow_cell over: (neighbors[p] where (done[each] and height > heights[each])) sort_by heights[each]  {
-				float water_flowing <- max(0.0, min((height - heights[flow_cell]), valid_dem[p] * diffusion_rate));
-				valid_dem[p] <- valid_dem[p] - water_flowing;
-				valid_dem[flow_cell] <- valid_dem[flow_cell] + water_flowing;
+				float water_flowing <- max(0.0, min((height - heights[flow_cell]), flow[p] * diffusion_rate));
+				flow[p] <- flow[p] - water_flowing;
+				flow[flow_cell] <- flow[flow_cell] + water_flowing;
 				heights[p] <- height(p) ;
 				heights[flow_cell] <- height(flow_cell) ;
 			}
@@ -138,11 +148,12 @@ global{
 		else {flooding_risk <- "alto";}
 	}
 	 //Actions related to DEM
-	 action filter_valid_pixels{
+	action filter_valid_pixels{
 	 	area the_area <- first(area where(each.type="limits"));
-	 	list<point> valid_points <- valid_dem points_in the_area-1;
+	 	geometry valid_area <- first(limits_shp);
+	 	valid_points <- points where(each overlaps valid_area);
 	 	loop pt over:valid_points{
-	 		valid_dem[pt] <- terrain[pt]>2092?0:(terrain[pt]<919?0:terrain[pt]);
+	 		valid_terrain[pt] <- terrain[pt]>2092?2092:(terrain[pt]<1621?-1.0:terrain[pt]);
 	 	}
 	 } 
 }
@@ -154,7 +165,7 @@ species building{
 	int length;
 	int heigth <- rnd(4,50);
 	action fix_height{
-		location <- {location.x,location.y,valid_dem[{location.x,location.y}]};
+		location <- {location.x,location.y,terrain[{location.x,location.y}]};
 	}
 	action init_random{
 		location <- any_location_in(one_of(area where(each.type="intervention area")));
@@ -181,14 +192,14 @@ species area{
 		else if type = "limits"{
 			draw shape wireframe:true border:#gray width:2.0;
 		}
-		else if type="limits_squared" and show_satellite{
+		/*else if type="limits_squared" and show_satellite{
 			if grayscale_satellite{
 				draw shape texture:satellite2_image_file;
 			}
 			else{
 				draw shape texture:satellite_image_file;
 			}
-		}
+		}*/
 		else if type = "watershed" and show_watershed{
 			draw shape color:rgb (28, 12, 222, 120) border:#white width:3.0 at:{location.x,location.y,5};
 		}
@@ -197,16 +208,16 @@ species area{
 
 experiment main type:gui{
 	output{
-		display main_display type:opengl background:#black axes:false{
+		display main_display type:opengl background:#black axes:true{
 			overlay size:{0,0} position:{0.05,0.05} transparency:0.5 background:#black{
 				draw "Escenario: "+scenario at:{70#px,70#px} color:#white font: font("Arial", 75,#bold);
 				draw "Área de filtración: "+permeability_per+"%" at:{70#px,125#px} color:#white font:font("Arial", 35,#bold);
 				draw "Riesgo de inundación: "+flooding_risk at:{70#px,165#px} color:#white font:font("Arial", 35,#bold);
 			}
-			camera 'default' location: {4211.3619,23177.9523,12112.5252} target: {10086.6575,5095.6516,0.0};
+			camera 'default' location: {1894.7121,15588.966,8311.7077} target: {5926.385,3180.7526,0.0};
 			//camera 'default' location: {1797.5449,38492.9671,12417.5757} target: {12996.2918,17431.1874,0.0};
-			mesh valid_dem scale: 1 triangulation: false  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
-			mesh valid_dem scale: 1 triangulation: true color: palette(reverse(brewer_colors("Blues"))) transparency: 0.5 no_data:0.0 ;
+			mesh valid_terrain scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
+			mesh flow scale: 1 triangulation: true color: palette(reverse(brewer_colors("Blues"))) transparency: 0.5 no_data:-1.0 ;
 			//species area aspect:default;
 			species building aspect:default;
 		}

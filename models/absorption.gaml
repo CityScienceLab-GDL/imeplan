@@ -25,18 +25,22 @@ global{
 	field terrain <- field(dem_file) ;
 	field valid_terrain <- field(terrain.columns, terrain.rows);
 	field flow <- field(terrain.columns,terrain.rows);	
+	field hf <- field(terrain.columns,terrain.rows);
 	list<point> points <- flow points_in shape;
 	list<point> valid_points;
-	map<point, list<point>> neighbors <- points as_map (each::(flow neighbors_of each));
-	map<point, bool> done <- points as_map (each::false);
-	map<point, float> h <- valid_points as_map (each::terrain[each]);
+	map<point, list<point>> neighbors;
+	
+	map<point, float> h;
 	map<point, float> heights <- [];
 	list<point> source_cells <- [];
+	map<point, bool> done;
+	
 	int frequence_input <- 1;
 	float diffusion_rate <- 0.8;
-	float input_water<-0.001 min:0.0 max:0.1 parameter:"rain";
+	float input_water<-0.001 min:0.0 max:1.0 parameter:"rain";
 	
 	string scenario;
+	string rain_area <- "high_areas";
 	bool grayscale_satellite;
 	bool show_satellite;
 	bool show_watershed;
@@ -61,9 +65,16 @@ global{
 		//do compute_indicators;
 		
 		do filter_valid_pixels;
+		
+		//Init maps that depend of valid_points
+		h <- valid_points as_map (each::valid_terrain[each]);
+		neighbors  <- valid_points as_map (each::(valid_points closest_to (each,8)));
+		
+		
 		loop c from:0 to:flow.columns{
 			loop r from: 0 to:flow.rows{
 				flow[{c,r}]<- -1.0;
+				hf[{c,r}]<- -1.0;
 			}
 		}
 		loop pt over:points-valid_points{
@@ -71,7 +82,7 @@ global{
 			flow[pt]<- -1.0;
 		}
 		loop pt over: valid_points  {
-			flow[pt] <- valid_terrain[pt];
+			flow[pt] <- 0.0;//valid_terrain[pt];
 		}
 		create building from:building_shp with:[from_scenario::"current"]{
 			drawable <- true;
@@ -86,7 +97,7 @@ global{
 			add self to:new_buildings;
 		}
 		
-		//source_cells <- valid_dem where(each.location.x 0)
+		source_cells <- valid_points where(valid_terrain[each]>1800);
 		
 	}
 	reflex listen_changes{
@@ -96,8 +107,14 @@ global{
 		}
 	}
 	
-	//Reflex to add water among the water cells
-	reflex adding_input_water when: every(frequence_input#cycle){
+	reflex rain_high_areas when: every(frequence_input#cycle) and rain_area="high_areas"{
+		loop p over:source_cells{
+			flow[p] <- flow[p] + input_water;
+		}
+	}
+	
+	//Reflex to add water to all the cells
+	reflex rain when: every(frequence_input#cycle) and rain_area="overall"{
 		loop p over: valid_points {
 			flow[p] <- flow[p] + input_water;
 		}
@@ -108,19 +125,21 @@ global{
 	
 	//Reflex to flow the water according to the altitude and the obstacle
 	reflex flowing {
-		done[] <- false;
-		heights <- points as_map (each::height(each));
-		list<point> water <- valid_points where (flow[each] > 0 and flow[each]<2092) sort_by (heights[each]);
-		loop p over: points - water {
+		done <- valid_points as_map (each::false);
+		heights <- valid_points as_map (each::height(each));
+		list<point> water <- valid_points where (flow[each] > 0) sort_by (heights[each]);
+		loop p over: valid_points - water {
 			done[p] <- true;
 		}
+		int tmp_c <- 0;
 		loop p over: water {
-			float height <- height(p);
-			loop flow_cell over: (neighbors[p] where (done[each] and height > heights[each])) sort_by heights[each]  {
-				float water_flowing <- max(0.0, min((height - heights[flow_cell]), flow[p] * diffusion_rate));
+			list<point> selected_nb <- neighbors[p] where(done[each] and height(p) > heights[each]) sort_by heights[each];
+			loop flow_cell over:  selected_nb{ //{
+				float water_flowing <- max(0.0, min((height(p) - heights[flow_cell]), flow[p] * diffusion_rate));
 				flow[p] <- flow[p] - water_flowing;
 				flow[flow_cell] <- flow[flow_cell] + water_flowing;
 				heights[p] <- height(p) ;
+				hf[p] <- heights[p];
 				heights[flow_cell] <- height(flow_cell) ;
 			}
 			done[p] <- true;
@@ -211,23 +230,29 @@ species area{
 	}
 }
 
-experiment main type:gui{
+experiment main type:gui parent:physical_world{
 	
 	parameter "watershed" var:show_watershed init:false;
 	parameter "show satellite" var:show_satellite init:false;
-	parameter "current scenario" var:scenario init:"current";
+	parameter "current scenario" var:scenario init:"current" among:["current","2011"];
+	parameter "type of rain" var:rain_area init:"high_areas" among:["high_areas","overall"];
 	output{
-		display main_display type:opengl background:#black axes:false fullscreen:0{
+		layout #split;
+		display main_display type:opengl background:#black axes:false{
 			overlay size:{0,0} position:{0.05,0.05} transparency:0.5 background:#black{
 				draw "Escenario: "+scenario at:{70#px,70#px} color:#white font: font("Arial", 75,#bold);
 				draw "Área de filtración: "+permeability_per+"%" at:{70#px,125#px} color:#white font:font("Arial", 35,#bold);
 				draw "Riesgo de inundación: "+flooding_risk at:{70#px,165#px} color:#white font:font("Arial", 35,#bold);
 			}
 			//camera 'default' location: {1894.7121,15588.966,8311.7077} target: {5926.385,3180.7526,0.0};
-			mesh valid_terrain scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true;
-			mesh flow scale: 1 triangulation: true color: palette((brewer_colors("Blues"))) transparency: 0.5 no_data:-1.0 ;
+			mesh valid_terrain scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true no_data:-1.0;
+			mesh hf scale: 1 triangulation: true color: palette((brewer_colors("Blues"))) transparency: 0.7 no_data:-1.0 ;
 			//species area aspect:default;
 			species building aspect:default;
+		}
+		display 2d type:java2D{
+			mesh valid_terrain scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true no_data:-1.0;
+			mesh flow scale: 1 triangulation: true color: palette(reverse(brewer_colors("Blues"))) transparency: 0.5 no_data:-1.0 ;
 		}
 	}
 }

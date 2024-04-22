@@ -246,7 +246,7 @@ experiment main type:gui parent:physical_world{
 			}
 			//camera 'default' location: {1894.7121,15588.966,8311.7077} target: {5926.385,3180.7526,0.0};
 			mesh valid_terrain scale: 1 triangulation: true  color: palette([#black, #saddlebrown, #darkgreen, #green]) refresh: false smooth: true no_data:-1.0;
-			mesh hf scale: 1 triangulation: true color: palette((brewer_colors("Blues"))) transparency: 0.7 no_data:-1.0 ;
+			mesh hf scale: 1 triangulation: true color: palette(reverse(brewer_colors("Blues"))) transparency: 0.7 no_data:-1.0 ;
 			//species area aspect:default;
 			species building aspect:default;
 		}
